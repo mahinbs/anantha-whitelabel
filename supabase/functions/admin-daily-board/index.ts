@@ -1,0 +1,454 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
+};
+function parseTimeframeMinutes(timeframe) {
+  const match = /^(\d+)(m|h|d|w)$/i.exec((timeframe || "1d").trim());
+  if (!match) return 1440;
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit === "m") return value;
+  if (unit === "h") return value * 60;
+  if (unit === "d") return value * 1440;
+  return value * 10080;
+}
+function computeExpiryIso(timeframe) {
+  const minutes = parseTimeframeMinutes(timeframe);
+  return new Date(Date.now() + minutes * 60 * 1000).toISOString();
+}
+function todayUtcDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+function normalizeProbability(raw) {
+  if (typeof raw !== "number" || Number.isNaN(raw)) return null;
+  return raw <= 1 ? Number((raw * 100).toFixed(2)) : Number(raw.toFixed(2));
+}
+async function getAuthContext(req, supabaseClient) {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) throw new Error("Missing authorization header");
+  const token = authHeader.replace("Bearer ", "");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (token && token === serviceRoleKey) return {
+    userId: null,
+    email: null,
+    isServiceRole: true
+  };
+  const { data, error } = await supabaseClient.auth.getUser(token);
+  if (error || !data.user) throw new Error("Invalid or expired token");
+  return {
+    userId: data.user.id,
+    email: data.user.email ?? null,
+    isServiceRole: false
+  };
+}
+async function assertAdmin(auth, supabaseClient) {
+  if (auth.isServiceRole) return;
+  const { data: roleRow, error } = await supabaseClient.from("user_roles").select("role").eq("user_id", auth.userId).maybeSingle();
+  if (error) throw new Error(`Failed to validate role: ${error.message}`);
+  const hasAdminRole = roleRow?.role === "admin" || roleRow?.role === "super_admin";
+  if (!hasAdminRole) throw new Error("Forbidden: admin access required");
+}
+async function callPredictMovement(symbol, timeframe, investment, profile) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const horizons = [
+    60,
+    240,
+    1440,
+    10080
+  ];
+  let response;
+  try {
+    response = await fetch(`${supabaseUrl}/functions/v1/predict-movement`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey
+      },
+      body: JSON.stringify({
+        symbol,
+        investment,
+        timeframe,
+        focusTimeframe: timeframe,
+        horizons,
+        ...profile
+      })
+    });
+  } catch (networkErr) {
+    throw new Error(`Network error calling predict-movement for ${symbol}: ${networkErr?.message ?? networkErr}`);
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch  {
+    const text = await response.text().catch(()=>"(empty body)");
+    throw new Error(`predict-movement returned non-JSON (status ${response.status}) for ${symbol}: ${text.slice(0, 300)}`);
+  }
+  if (!response.ok) {
+    const detail = payload?.details ?? payload?.error ?? `status ${response.status}`;
+    throw new Error(`predict-movement failed for ${symbol}: ${detail}`);
+  }
+  return payload;
+}
+async function generateBoardRows(rows, generatedForDate, generatedBy, refreshReason) {
+  const generatedRows = [];
+  for (const row of rows){
+    const prediction = await callPredictMovement(row.symbol, row.timeframe || "1d", Number(row.investment || 10000), row.profile || {});
+    const forecast = prediction?.geminiForecast?.forecasts?.[0];
+    const probabilities = forecast?.probabilities || {};
+    const maxProbability = Math.max(Number(probabilities.up ?? 0), Number(probabilities.down ?? 0), Number(probabilities.sideways ?? 0));
+    generatedRows.push({
+      generated_for_date: generatedForDate,
+      symbol: row.symbol,
+      display_name: row.display_name || row.symbol,
+      sort_order: row.sort_order,
+      timeframe: row.timeframe || "1d",
+      investment: Number(row.investment || 10000),
+      profile: row.profile || {},
+      prediction_payload: prediction,
+      probability_score: normalizeProbability(maxProbability),
+      action_signal: prediction?.geminiForecast?.action_signal?.action || null,
+      expires_at: computeExpiryIso(row.timeframe || "1d"),
+      generated_by: generatedBy,
+      refresh_reason: refreshReason,
+      is_active: true,
+      generated_at: new Date().toISOString()
+    });
+  }
+  return generatedRows;
+}
+serve(async (req)=>{
+  if (req.method === "OPTIONS") return new Response("ok", {
+    headers: corsHeaders
+  });
+  try {
+    const supabaseClient = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+    const auth = await getAuthContext(req, supabaseClient);
+    await assertAdmin(auth, supabaseClient);
+    if (req.method === "GET") {
+      const url = new URL(req.url);
+      const date = url.searchParams.get("date");
+      let query = supabaseClient.from("daily_predictions_board").select("*").order("generated_for_date", {
+        ascending: false
+      }).order("sort_order", {
+        ascending: true
+      });
+      if (date) query = query.eq("generated_for_date", date);
+      const { data, error } = await query.limit(200);
+      if (error) throw new Error(`Failed to fetch board: ${error.message}`);
+      return new Response(JSON.stringify({
+        rows: data ?? []
+      }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({
+        error: "Method not allowed"
+      }), {
+        status: 405,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    const body = await req.json().catch(()=>({}));
+    const action = body?.action || "generate";
+    const generatedForDate = body?.date || todayUtcDate();
+    if (action === "generate" || action === "daily") {
+      const { data: watchlist, error } = await supabaseClient.from("admin_symbol_watchlist").select("symbol, display_name, sort_order, timeframe, investment, profile, is_active").eq("is_active", true).order("sort_order", {
+        ascending: true
+      }).limit(10);
+      if (error) throw new Error(`Failed to fetch watchlist: ${error.message}`);
+      if (!watchlist || watchlist.length === 0) {
+        return new Response(JSON.stringify({
+          message: "No active symbols in watchlist",
+          updated: 0
+        }), {
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        });
+      }
+      const rows = await generateBoardRows(watchlist.map((r)=>({
+          symbol: r.symbol,
+          display_name: r.display_name,
+          sort_order: r.sort_order,
+          timeframe: r.timeframe,
+          investment: Number(r.investment),
+          profile: r.profile || {}
+        })), generatedForDate, auth.userId, action === "daily" ? "daily" : "manual");
+      const { error: upsertError } = await supabaseClient.from("daily_predictions_board").upsert(rows, {
+        onConflict: "generated_for_date,symbol"
+      });
+      if (upsertError) throw new Error(`Failed to upsert board rows: ${upsertError.message}`);
+      return new Response(JSON.stringify({
+        success: true,
+        action,
+        generatedForDate,
+        updated: rows.length
+      }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    if (action === "publish") {
+      const { symbol: pubSymbol, display_name: pubDisplayName, timeframe: pubTimeframe, investment: pubInvestment, prediction_payload: predictionPayload } = body;
+      if (!pubSymbol || !predictionPayload) {
+        return new Response(JSON.stringify({
+          error: "Missing symbol or prediction_payload for publish"
+        }), {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        });
+      }
+      const symbolNorm = String(pubSymbol).trim().toUpperCase().replace(/^.*:/, "");
+      const forecast = predictionPayload?.geminiForecast?.forecasts?.[0];
+      const probabilities = forecast?.probabilities || {};
+      const maxProbability = Math.max(Number(probabilities.up ?? 0), Number(probabilities.down ?? 0), Number(probabilities.sideways ?? 0));
+      const row = {
+        generated_for_date: generatedForDate,
+        symbol: symbolNorm,
+        display_name: pubDisplayName ? String(pubDisplayName).trim() : symbolNorm,
+        sort_order: 0,
+        timeframe: pubTimeframe || "1d",
+        investment: Number(pubInvestment || 10000),
+        profile: {},
+        prediction_payload: predictionPayload,
+        probability_score: normalizeProbability(maxProbability),
+        action_signal: predictionPayload?.geminiForecast?.action_signal?.action || null,
+        expires_at: computeExpiryIso(pubTimeframe || "1d"),
+        generated_by: auth.userId,
+        refresh_reason: "manual",
+        is_active: true,
+        generated_at: new Date().toISOString()
+      };
+      // Preserve sort_order if this symbol already exists for this date, else append
+      const { data: existingForSymbol } = await supabaseClient.from("daily_predictions_board").select("sort_order").eq("generated_for_date", generatedForDate).eq("symbol", symbolNorm).maybeSingle();
+      if (existingForSymbol?.sort_order != null) {
+        row.sort_order = existingForSymbol.sort_order;
+      } else {
+        const { data: lastRow } = await supabaseClient.from("daily_predictions_board").select("sort_order").eq("generated_for_date", generatedForDate).order("sort_order", {
+          ascending: false
+        }).limit(1).maybeSingle();
+        row.sort_order = lastRow?.sort_order != null ? lastRow.sort_order + 1 : 0;
+      }
+      const { error: upsertError } = await supabaseClient.from("daily_predictions_board").upsert(row, {
+        onConflict: "generated_for_date,symbol"
+      });
+      if (upsertError) throw new Error(`Failed to publish: ${upsertError.message}`);
+      return new Response(JSON.stringify({
+        success: true,
+        action: "publish",
+        symbol: symbolNorm,
+        generated_for_date: generatedForDate
+      }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    if (action === "delete") {
+      const { id: deleteId } = body;
+      if (!deleteId) {
+        return new Response(JSON.stringify({
+          error: "Missing id for delete"
+        }), {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        });
+      }
+      const { error: deleteError } = await supabaseClient.from("daily_predictions_board").delete().eq("id", String(deleteId));
+      if (deleteError) throw new Error(`Failed to delete: ${deleteError.message}`);
+      return new Response(JSON.stringify({
+        success: true,
+        action: "delete",
+        id: deleteId
+      }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    if (action === "re_predict") {
+      const { symbol: repSymbol, display_name: repDisplayName, timeframe: repTimeframe, investment: repInvestment, generated_for_date: repDate } = body;
+      if (!repSymbol) {
+        return new Response(JSON.stringify({
+          error: "Missing symbol for re_predict"
+        }), {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        });
+      }
+      // Use the date of the existing row if provided, otherwise today
+      const repForDate = typeof repDate === "string" && repDate.trim() ? repDate.trim() : generatedForDate;
+      const repTf = repTimeframe || "1d";
+      const repInv = Number(repInvestment || 10000);
+      const repSymNorm = String(repSymbol).trim().toUpperCase();
+      // Fetch existing row's sort_order so we don't reset it to 0
+      const { data: existingRow } = await supabaseClient.from("daily_predictions_board").select("sort_order, profile").eq("generated_for_date", repForDate).eq("symbol", repSymNorm).maybeSingle();
+      const repProfile = existingRow?.profile || {};
+      const baseProfile = {
+        riskTolerance: repProfile.riskTolerance ?? "medium",
+        tradingStyle: repProfile.tradingStyle ?? "swing_trading",
+        investmentGoal: repProfile.investmentGoal ?? "growth",
+        stopLossPercentage: repProfile.stopLossPercentage ?? 5,
+        targetProfitPercentage: repProfile.targetProfitPercentage ?? 15,
+        leverage: repProfile.leverage ?? 1,
+        marginType: repProfile.marginType ?? "cash"
+      };
+      let prediction;
+      try {
+        prediction = await callPredictMovement(repSymNorm, repTf, repInv, baseProfile);
+      } catch (predErr) {
+        const msg = predErr instanceof Error ? predErr.message : String(predErr);
+        console.error(`re_predict: callPredictMovement failed — ${msg}`);
+        return new Response(JSON.stringify({
+          error: `Prediction failed: ${msg}`
+        }), {
+          status: 500,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        });
+      }
+      const gf = prediction?.geminiForecast;
+      const forecast = gf?.forecasts?.[0];
+      const probs = forecast?.probabilities || {};
+      const maxProb = Math.max(Number(probs.up ?? 0), Number(probs.down ?? 0), Number(probs.sideways ?? 0));
+      const slimPayload = {
+        symbol: prediction?.symbol,
+        currentPrice: prediction?.currentPrice,
+        change: prediction?.change,
+        changePercent: prediction?.changePercent,
+        rationale: prediction?.rationale,
+        patterns: prediction?.patterns,
+        opportunities: prediction?.opportunities,
+        geminiForecast: gf ? {
+          action_signal: gf.action_signal,
+          forecasts: gf.forecasts?.slice(0, 4),
+          support_resistance: gf.support_resistance,
+          positioning_guidance: gf.positioning_guidance,
+          expected_roi: gf.expected_roi,
+          risk_grade: gf.risk_grade,
+          deep_analysis: gf.deep_analysis,
+          market_context: gf.market_context
+        } : undefined
+      };
+      const repRow = {
+        generated_for_date: repForDate,
+        symbol: repSymNorm,
+        display_name: repDisplayName || repSymNorm,
+        sort_order: existingRow?.sort_order ?? 0,
+        timeframe: repTf,
+        investment: repInv,
+        profile: baseProfile,
+        prediction_payload: slimPayload,
+        probability_score: normalizeProbability(maxProb),
+        action_signal: gf?.action_signal?.action || null,
+        expires_at: computeExpiryIso(repTf),
+        generated_by: auth.userId,
+        refresh_reason: "re_predict",
+        is_active: true,
+        generated_at: new Date().toISOString()
+      };
+      const { error: upsertError } = await supabaseClient.from("daily_predictions_board").upsert(repRow, {
+        onConflict: "generated_for_date,symbol"
+      });
+      if (upsertError) throw new Error(`Failed to re_predict upsert: ${upsertError.message}`);
+      return new Response(JSON.stringify({
+        success: true,
+        action: "re_predict",
+        symbol: repSymNorm,
+        generated_for_date: repForDate
+      }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    if (action === "refresh_expired") {
+      const { data: expiredRows, error: expiredError } = await supabaseClient.from("daily_predictions_board").select("symbol, display_name, sort_order, timeframe, investment, profile").eq("generated_for_date", generatedForDate).eq("is_active", true).lte("expires_at", new Date().toISOString()).order("sort_order", {
+        ascending: true
+      });
+      if (expiredError) throw new Error(`Failed to fetch expired rows: ${expiredError.message}`);
+      if (!expiredRows || expiredRows.length === 0) {
+        return new Response(JSON.stringify({
+          success: true,
+          action,
+          generatedForDate,
+          updated: 0
+        }), {
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json"
+          }
+        });
+      }
+      const rows = await generateBoardRows(expiredRows, generatedForDate, auth.userId, "expiry");
+      const { error: upsertError } = await supabaseClient.from("daily_predictions_board").upsert(rows, {
+        onConflict: "generated_for_date,symbol"
+      });
+      if (upsertError) throw new Error(`Failed to refresh rows: ${upsertError.message}`);
+      return new Response(JSON.stringify({
+        success: true,
+        action,
+        generatedForDate,
+        updated: rows.length
+      }), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
+        }
+      });
+    }
+    return new Response(JSON.stringify({
+      error: `Unsupported action: ${action}`
+    }), {
+      status: 400,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json"
+      }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({
+      error: error.message ?? "Internal server error"
+    }), {
+      status: error.message?.includes("Forbidden") ? 403 : 500,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json"
+      }
+    });
+  }
+});

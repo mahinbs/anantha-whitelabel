@@ -1,0 +1,566 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { corsHeaders } from '../_shared/cors.ts';
+// Yahoo Finance symbol normalization (duplicated from predict-movement)
+function normalizeToYahooSymbol(raw) {
+  // Strip exchange prefixes (incl. NSE/BSE for Indian listings)
+  const cleanSymbol = raw.replace(/^(NASDAQ|NYSE|BINANCE|OANDA|SP|DJ|COMEX|NYMEX|NSE|BSE):/i, '').trim();
+  const upperSym = cleanSymbol.toUpperCase();
+  if (upperSym.endsWith('.NS') || upperSym.endsWith('.BO')) {
+    return {
+      yahooSymbol: upperSym,
+      assetType: 'stock'
+    };
+  }
+  // Already Yahoo crypto style e.g. BTC-USD
+  if (/^[A-Z0-9]+-USD$/i.test(cleanSymbol)) {
+    return {
+      yahooSymbol: upperSym,
+      assetType: 'crypto'
+    };
+  }
+  // Stocks mapping
+  if (/^[A-Z]{1,5}$/.test(cleanSymbol)) {
+    // Indian stocks get .NS suffix
+    if (raw.includes('NSE:')) {
+      return {
+        yahooSymbol: `${cleanSymbol}.NS`,
+        assetType: 'stock'
+      };
+    }
+    return {
+      yahooSymbol: cleanSymbol,
+      assetType: 'stock'
+    };
+  }
+  // Forex mapping
+  const forexPairs = [
+    'EUR',
+    'USD',
+    'GBP',
+    'JPY',
+    'CHF',
+    'CAD',
+    'AUD',
+    'NZD'
+  ];
+  // Handle EUR_USD, EUR/USD, EURUSD formats
+  let forexBase = '', forexQuote = '';
+  if (cleanSymbol.includes('_')) {
+    [forexBase, forexQuote] = cleanSymbol.split('_');
+  } else if (cleanSymbol.includes('/')) {
+    [forexBase, forexQuote] = cleanSymbol.split('/');
+  } else if (cleanSymbol.length === 6 && /^[A-Z]{6}$/.test(cleanSymbol)) {
+    forexBase = cleanSymbol.slice(0, 3);
+    forexQuote = cleanSymbol.slice(3);
+  }
+  if (forexPairs.includes(forexBase) && forexPairs.includes(forexQuote)) {
+    return {
+      yahooSymbol: `${forexBase}${forexQuote}=X`,
+      assetType: 'forex'
+    };
+  }
+  // Crypto mapping
+  const cryptoMap = {
+    'BTCUSDT': 'BTC-USD',
+    'BTCUSD': 'BTC-USD',
+    'ETHUSDT': 'ETH-USD',
+    'ETHUSD': 'ETH-USD',
+    'SOLUSDT': 'SOL-USD',
+    'SOLUSD': 'SOL-USD',
+    'ADAUSDT': 'ADA-USD',
+    'ADAUSD': 'ADA-USD'
+  };
+  if (cryptoMap[cleanSymbol]) {
+    return {
+      yahooSymbol: cryptoMap[cleanSymbol],
+      assetType: 'crypto'
+    };
+  }
+  // Index mapping
+  const indexMap = {
+    'SPX': '^GSPC',
+    'DJI': '^DJI',
+    'NDX': '^NDX'
+  };
+  if (indexMap[cleanSymbol]) {
+    return {
+      yahooSymbol: indexMap[cleanSymbol],
+      assetType: 'index'
+    };
+  }
+  // Commodity mapping
+  const commodityMap = {
+    'GOLD': 'GC=F',
+    'GC1!': 'GC=F',
+    'SILVER': 'SI=F',
+    'SI1!': 'SI=F',
+    'OIL': 'CL=F',
+    'CL1!': 'CL=F'
+  };
+  if (commodityMap[cleanSymbol]) {
+    return {
+      yahooSymbol: commodityMap[cleanSymbol],
+      assetType: 'commodity'
+    };
+  }
+  // Default to stock
+  return {
+    yahooSymbol: cleanSymbol,
+    assetType: 'stock'
+  };
+}
+// Fetch chart data from Yahoo Finance using period1/period2
+async function fetchYahooChartWithPeriod(params) {
+  const { yahooSymbol, period1, period2, interval } = params;
+  console.log(`🟡 Fetching Yahoo chart: ${yahooSymbol}, interval: ${interval}, period1: ${period1}, period2: ${period2}`);
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?period1=${period1}&period2=${period2}&interval=${interval}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!response.ok) {
+    throw new Error(`Yahoo chart HTTP ${response.status}: ${await response.text()}`);
+  }
+  const data = await response.json();
+  if (!data.chart?.result?.[0]) {
+    throw new Error('No chart data found in Yahoo response');
+  }
+  const result = data.chart.result[0];
+  const timestamps = result.timestamp || [];
+  const indicators = result.indicators?.quote?.[0];
+  if (!indicators || !timestamps.length) {
+    throw new Error('No price data in Yahoo chart response');
+  }
+  const candles = [];
+  for(let i = 0; i < timestamps.length; i++){
+    if (indicators.open?.[i] !== null && indicators.close?.[i] !== null) {
+      candles.push({
+        timestamp: timestamps[i] * 1000,
+        open: indicators.open[i] || 0,
+        high: indicators.high[i] || 0,
+        low: indicators.low[i] || 0,
+        close: indicators.close[i] || 0,
+        volume: indicators.volume?.[i] || 0
+      });
+    }
+  }
+  console.log(`✅ Yahoo chart success: ${candles.length} candles for ${yahooSymbol}`);
+  return candles;
+}
+// Generate AI-powered report using Gemini
+async function generateAIReport(symbol, prediction, actualData, evaluation, geminiApiKey) {
+  const prompt = `You are an expert financial analyst providing a detailed post-prediction report. Analyze this market prediction and outcome:
+
+PREDICTION MADE:
+- Symbol: ${symbol}
+- Direction: ${prediction.direction}
+- Expected Move: ${prediction.movePercent}%
+- Timeframe: ${prediction.horizon || 'N/A'}
+
+ACTUAL OUTCOME:
+- Start Price: $${actualData.startPrice.toFixed(4)}
+- End Price: $${actualData.endPrice.toFixed(4)}
+- Actual Move: ${actualData.actualChangePercent.toFixed(2)}%
+- High: $${actualData.high.toFixed(4)}
+- Low: $${actualData.low.toFixed(4)}
+- Data Points: ${actualData.candleCount} candles (${actualData.interval})
+
+EVALUATION: ${evaluation.result.toUpperCase()} - ${evaluation.reasoning}
+
+Provide a comprehensive analysis in this EXACT JSON format:
+{
+  "title": "Brief title summarizing the outcome",
+  "whatWePredicted": "Clear description of what was predicted",
+  "whatHappened": "Factual description of market movement",
+  "verdictExplanation": "Detailed explanation of why it was accurate/partial/failed",
+  "failureExcuse": "If failed: honest, brief excuse (market volatility, news, etc.) - null if not failed",
+  "successExplanation": "If successful: why the prediction worked - null if failed",
+  "keyFactors": ["3-5 bullet points of key factors that influenced the outcome"],
+  "nextSteps": ["3-4 actionable insights for future predictions"],
+  "confidenceNote": "Brief note on prediction confidence and market conditions"
+}
+
+Keep it professional, concise, and educational. Focus on learning from the outcome.`;
+  try {
+    // Use a stable model; gemini-3-pro + thinkingConfig often 400s on standard API keys
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiApiKey, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: prompt
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 3000
+        }
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Gemini API error: ${response.status}`);
+    }
+    const data = await response.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    // Try to parse JSON from the response
+    let report = null;
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        report = JSON.parse(jsonMatch[0]);
+      }
+    } catch (parseError) {
+      console.warn('Failed to parse JSON from Gemini response, using fallback');
+    }
+    // Fallback if parsing fails
+    if (!report) {
+      report = {
+        title: `${symbol} Prediction ${evaluation.result === 'accurate' ? 'Success' : evaluation.result === 'partial' ? 'Partial Success' : 'Miss'}`,
+        whatWePredicted: `Expected ${prediction.direction} move of ${prediction.movePercent}%`,
+        whatHappened: `Price moved ${actualData.actualChangePercent.toFixed(2)}% from $${actualData.startPrice.toFixed(4)} to $${actualData.endPrice.toFixed(4)}`,
+        verdictExplanation: evaluation.reasoning,
+        failureExcuse: evaluation.result === 'failed' ? 'Market conditions were more volatile than expected' : null,
+        successExplanation: evaluation.result === 'accurate' ? 'Market behaved as predicted based on technical analysis' : null,
+        keyFactors: [
+          'Market volatility',
+          'Technical indicators',
+          'Price action patterns'
+        ],
+        nextSteps: [
+          'Monitor similar setups',
+          'Refine prediction parameters',
+          'Consider market context'
+        ],
+        confidenceNote: 'Continue monitoring market patterns for improved accuracy'
+      };
+    }
+    return {
+      report,
+      rawText
+    };
+  } catch (error) {
+    console.error('Gemini API error:', error);
+    throw new Error(`AI analysis failed: ${error.message}`);
+  }
+}
+// Generate fallback summary with realistic context
+function generateFallbackSummary(marketData, displaySymbol, dataSourceInfo = '') {
+  if (!marketData || !marketData.candles || marketData.candles.length === 0) {
+    return `• No market data available for ${displaySymbol} in the specified timeframe.\n• Unable to provide analysis without price data.${dataSourceInfo ? `\n\nData: ${dataSourceInfo}` : ''}`;
+  }
+  const candles = marketData.candles;
+  const open = candles[0].open;
+  const close = candles[candles.length - 1].close;
+  const high = Math.max(...candles.map((c)=>c.high));
+  const low = Math.min(...candles.map((c)=>c.low));
+  const priceChange = close - open;
+  const priceChangePercent = (priceChange / open * 100).toFixed(2);
+  const direction = priceChange >= 0 ? 'up' : 'down';
+  const sign = priceChange >= 0 ? '+' : '';
+  const dataSuffix = dataSourceInfo ? `\n\nData: ${dataSourceInfo}` : '';
+  return `• ${displaySymbol} moved ${direction} by ${sign}${priceChangePercent}% from ${open.toFixed(6)} to ${close.toFixed(6)}.\n• High: ${high.toFixed(6)}, Low: ${low.toFixed(6)}\n• Total candles analyzed: ${candles.length}${dataSuffix}`;
+}
+serve(async (req)=>{
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      headers: corsHeaders
+    });
+  }
+  try {
+    const { symbol, from, to, expected, marketMeta } = await req.json();
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
+    if (!geminiApiKey) {
+      return new Response(JSON.stringify({
+        error: 'Gemini API key not configured'
+      }), {
+        status: 500,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json'
+        }
+      });
+    }
+    const fromTime = new Date(from);
+    const toTime = to ? new Date(to) : new Date();
+    console.log(`Analyzing ${symbol} from ${fromTime.toISOString()} to ${toTime.toISOString()}`);
+    // Normalize symbol to Yahoo format
+    const { yahooSymbol, assetType } = normalizeToYahooSymbol(symbol);
+    console.log(`Mapped ${symbol} → ${yahooSymbol} (${assetType})`);
+    // Use period1/period2 for precise time range
+    const period1 = Math.floor((fromTime.getTime() - 5 * 60 * 1000) / 1000); // 5 min padding
+    const period2 = Math.floor((toTime.getTime() - 60 * 1000) / 1000); // 1 min gap from now
+    // Try different intervals until we get data
+    const intervalSequence = [
+      '1m',
+      '2m',
+      '5m',
+      '15m',
+      '30m',
+      '60m',
+      '1d'
+    ];
+    let marketData = null;
+    let dataSource = '';
+    let triedIntervals = [];
+    for (const interval of intervalSequence){
+      try {
+        console.log(`🔄 Trying Yahoo with interval: ${interval}`);
+        const candles = await fetchYahooChartWithPeriod({
+          yahooSymbol,
+          period1,
+          period2,
+          interval
+        });
+        if (candles.length > 0) {
+          marketData = {
+            source: `Yahoo Finance ${yahooSymbol} (${interval})`,
+            candles,
+            candleCount: candles.length
+          };
+          dataSource = `Yahoo Finance (${interval})`;
+          console.log(`✅ Success with ${interval}: ${candles.length} candles`);
+          break;
+        } else {
+          triedIntervals.push(`${interval} (no data)`);
+        }
+      } catch (error) {
+        console.log(`❌ Failed with ${interval}:`, error.message);
+        triedIntervals.push(`${interval} (error: ${error.message})`);
+        continue;
+      }
+    }
+    if (!marketData) {
+      console.log(`⚠️ No data found for ${symbol} → ${yahooSymbol}. Tried: ${triedIntervals.join(', ')}`);
+      // Try daily data as fallback
+      try {
+        console.log('🔄 Trying daily data fallback (5d, 1d)');
+        const fallbackCandles = await fetchYahooChartWithPeriod({
+          yahooSymbol,
+          period1: Math.floor((fromTime.getTime() - 5 * 24 * 60 * 60 * 1000) / 1000),
+          period2: Math.floor(toTime.getTime() / 1000),
+          interval: '1d'
+        });
+        if (fallbackCandles.length > 0) {
+          marketData = {
+            source: `Yahoo Finance ${yahooSymbol} (1d fallback)`,
+            candles: fallbackCandles,
+            candleCount: fallbackCandles.length,
+            isInconclusive: true // Mark as inconclusive for intraday predictions
+          };
+          dataSource = 'Yahoo Finance (1d fallback)';
+          console.log(`✅ Fallback success: ${fallbackCandles.length} daily candles`);
+        }
+      } catch (fallbackError) {
+        console.log('❌ Daily fallback also failed:', fallbackError.message);
+      }
+    }
+    if (!marketData) {
+      return new Response(JSON.stringify({
+        status: 'no_data',
+        summary: `No market data available for ${symbol} in the specified timeframe.`,
+        dataSource: 'Yahoo Finance (no data)',
+        tried: triedIntervals
+      }), {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json'
+        }
+      });
+    }
+    // Generate summary from actual market data
+    const summary = generateFallbackSummary(marketData, symbol, dataSource);
+    // If we have expected values, calculate evaluation and AI report
+    let evaluation = null;
+    let aiReport = null;
+    if (expected && marketData.candles.length > 0) {
+      // Check if we have sufficient data for evaluation
+      const isInsufficientData = marketData.candles.length < 2 || marketData.isInconclusive;
+      const candles = marketData.candles;
+      const startPrice = candles[0].close;
+      const endPrice = candles[candles.length - 1].close;
+      const actualChangePercent = (endPrice - startPrice) / startPrice * 100;
+      // Check price targets
+      const hitTargetMax = expected.priceTargetMax ? candles.some((c)=>c.high >= expected.priceTargetMax) : false;
+      const hitTargetMin = expected.priceTargetMin ? candles.some((c)=>c.low <= expected.priceTargetMin) : false;
+      // Enhanced accuracy evaluation with multiple metrics
+      let result = '';
+      let reasoning = '';
+      let accuracyScore = 0;
+      let confidenceAdjustment = 0;
+      // Must exist for evaluation object when branch skips `else` (avoids ReferenceError → 500)
+      let directionScore = 0;
+      let magnitudeScore = 0;
+      let timingScore = 0;
+      let riskScore = 0;
+      // If insufficient data, mark as inconclusive
+      if (isInsufficientData) {
+        result = 'inconclusive';
+        reasoning = `Insufficient market data for reliable evaluation (${marketData.candleCount} candles, ${dataSource})`;
+        accuracyScore = 0;
+      } else {
+        // Enhanced accuracy calculation with multiple factors
+        // Factor 1: Direction accuracy (40% weight)
+        directionScore = 0;
+        if (expected.direction === 'up' && actualChangePercent > 0) {
+          directionScore = 1;
+        } else if (expected.direction === 'down' && actualChangePercent < 0) {
+          directionScore = 1;
+        } else if (expected.direction === 'neutral' || expected.direction === 'sideways') {
+          directionScore = Math.abs(actualChangePercent) < 1.0 ? 1 : 0.5;
+        } else {
+          directionScore = 0;
+        }
+        // Factor 2: Magnitude accuracy (30% weight)
+        magnitudeScore = 0;
+        if (expected.movePercent > 0) {
+          const actualMagnitude = Math.abs(actualChangePercent);
+          const expectedMagnitude = expected.movePercent;
+          const ratio = Math.min(actualMagnitude / expectedMagnitude, expectedMagnitude / actualMagnitude);
+          magnitudeScore = ratio;
+        } else {
+          magnitudeScore = 1; // Neutral/sideways predictions
+        }
+        // Factor 3: Timing accuracy (20% weight)
+        timingScore = 1; // Default to full score, can be enhanced with intraday analysis
+        // Factor 4: Risk-adjusted performance (10% weight)
+        riskScore = 1;
+        const maxDrawdown = Math.abs(Math.min(...candles.map((c)=>c.low)) - startPrice) / startPrice;
+        if (maxDrawdown > expected.movePercent * 2) {
+          riskScore = 0.5; // High drawdown penalty
+        }
+        // Calculate weighted accuracy score
+        accuracyScore = (directionScore * 0.4 + magnitudeScore * 0.3 + timingScore * 0.2 + riskScore * 0.1) * 100;
+        // Determine result based on accuracy score
+        if (accuracyScore >= 80) {
+          result = 'accurate';
+          reasoning = `High accuracy prediction: ${accuracyScore.toFixed(1)}% score`;
+        } else if (accuracyScore >= 60) {
+          result = 'partial';
+          reasoning = `Moderate accuracy: ${accuracyScore.toFixed(1)}% score`;
+        } else {
+          result = 'failed';
+          reasoning = `Low accuracy: ${accuracyScore.toFixed(1)}% score`;
+        }
+        // Add specific details to reasoning
+        if (expected.direction === 'up') {
+          if (actualChangePercent >= expected.movePercent * 0.8) {
+            reasoning += ` - Predicted upward move achieved: ${actualChangePercent.toFixed(2)}% vs target ${expected.movePercent}%`;
+          } else if (actualChangePercent > 0) {
+            reasoning += ` - Moved up ${actualChangePercent.toFixed(2)}% but fell short of ${expected.movePercent}% target`;
+          } else {
+            reasoning += ` - Moved down ${actualChangePercent.toFixed(2)}% instead of up ${expected.movePercent}%`;
+          }
+        } else if (expected.direction === 'down') {
+          if (actualChangePercent <= -expected.movePercent * 0.8) {
+            reasoning += ` - Predicted downward move achieved: ${actualChangePercent.toFixed(2)}% vs target -${expected.movePercent}%`;
+          } else if (actualChangePercent < 0) {
+            reasoning += ` - Moved down ${Math.abs(actualChangePercent).toFixed(2)}% but fell short of ${expected.movePercent}% target`;
+          } else {
+            reasoning += ` - Moved up ${actualChangePercent.toFixed(2)}% instead of down ${expected.movePercent}%`;
+          }
+        } else if (expected.direction === 'neutral' || expected.direction === 'sideways') {
+          const absChange = Math.abs(actualChangePercent);
+          if (absChange <= 1.0) {
+            reasoning += ` - Stayed ${expected.direction} with minimal movement: ${actualChangePercent.toFixed(2)}%`;
+          } else if (absChange <= 2.0) {
+            reasoning += ` - Small movement of ${actualChangePercent.toFixed(2)}% close to ${expected.direction} prediction`;
+          } else {
+            reasoning += ` - Significant movement of ${actualChangePercent.toFixed(2)}% exceeded ${expected.direction} prediction`;
+          }
+        }
+        // Calculate confidence adjustment for future predictions
+        if (result === 'accurate') {
+          confidenceAdjustment = Math.min(10, accuracyScore - 80); // Boost confidence up to 10%
+        } else if (result === 'failed') {
+          confidenceAdjustment = Math.max(-20, accuracyScore - 60); // Reduce confidence up to 20%
+        }
+      }
+      evaluation = {
+        result,
+        startPrice,
+        endPrice,
+        actualChangePercent,
+        predictedDirection: expected.direction,
+        predictedMovePercent: expected.movePercent,
+        hitTargetMax,
+        hitTargetMin,
+        endTimeUsed: toTime.toISOString(),
+        reasoning,
+        // Enhanced accuracy metrics
+        accuracyScore: Math.round(accuracyScore * 10) / 10,
+        confidenceAdjustment,
+        directionAccuracy: directionScore,
+        magnitudeAccuracy: magnitudeScore,
+        timingAccuracy: timingScore,
+        riskAdjustedScore: riskScore
+      };
+      console.log(`📊 Evaluation: ${result} - ${reasoning}`);
+      // Generate AI-powered detailed report
+      try {
+        const actualData = {
+          startPrice,
+          endPrice,
+          actualChangePercent,
+          high: Math.max(...candles.map((c)=>c.high)),
+          low: Math.min(...candles.map((c)=>c.low)),
+          candleCount: candles.length,
+          interval: dataSource.match(/\(([^)]+)\)/)?.[1] || 'unknown'
+        };
+        const predictionData = {
+          direction: expected.direction,
+          movePercent: expected.movePercent,
+          horizon: expected.horizon
+        };
+        aiReport = await generateAIReport(symbol, predictionData, actualData, evaluation, geminiApiKey);
+        console.log('🤖 AI report generated successfully');
+      } catch (aiError) {
+        console.warn('AI report generation failed:', aiError.message);
+      // Continue without AI report if it fails
+      }
+    }
+    return new Response(JSON.stringify({
+      symbol,
+      summary,
+      dataSource,
+      marketData: {
+        candleCount: marketData.candleCount,
+        source: marketData.source,
+        interval: dataSource.match(/\(([^)]+)\)/)?.[1] || 'unknown'
+      },
+      from: fromTime.toISOString(),
+      to: toTime.toISOString(),
+      evaluation,
+      ai: aiReport
+    }), {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (error) {
+    console.error('Error in analyze-post-prediction function:', error);
+    return new Response(JSON.stringify({
+      error: 'Failed to analyze market data',
+      message: error.message
+    }), {
+      status: 500,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json'
+      }
+    });
+  }
+});

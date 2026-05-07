@@ -1,0 +1,107 @@
+project_id = "ssesqiqtndhurfyntgbm"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[realtime]
+enabled = true
+ip_version = "IPv4"
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1:54321"
+
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = ["https://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+
+[functions.predict-movement]
+verify_jwt = false
+
+[functions.analyze-post-prediction]
+verify_jwt = false
+
+[functions.search-symbols]
+verify_jwt = false
+
+[functions.get-market-status]
+verify_jwt = false
+
+[functions.analyze-news-google]
+verify_jwt = false
+
+# Auth is enforced inside the function (user JWT or ENTRY_DIGEST_SECRET for daily digest jobs).
+[functions.strategy-entry-signals]
+verify_jwt = false
+
+[functions.entry-point-daily-digest]
+verify_jwt = false
+
+# Cron + internal monitor use secrets in headers, not end-user JWT.
+[functions.process-conditional-orders]
+verify_jwt = false
+
+[functions.stream-conditional-tick]
+verify_jwt = false
+
+[functions.submit-algo-access-request]
+verify_jwt = false
+
+[functions.get-algo-access-requests]
+verify_jwt = false
+
+# Browser dashboard calls these with POST + Authorization; OPTIONS preflight has no JWT.
+# Auth is enforced inside each function via service client + getUser(access_token).
+[functions.manage-strategy]
+verify_jwt = false
+
+[functions.broker-order-action]
+verify_jwt = false
+
+[functions.submit-strategy-dev-request]
+verify_jwt = false
+
+[functions.admin-strategy-dev-requests]
+verify_jwt = false
+
+# Browser (localhost + prod) calls POST with Authorization; OPTIONS preflight has no user JWT.
+# Reject/Provision enforce super_admin inside the function.
+[functions.admin-reject-algo]
+verify_jwt = false
+
+[functions.admin-provision-algo]
+verify_jwt = false
