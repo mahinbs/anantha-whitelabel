@@ -1033,7 +1033,7 @@ const LandingPageNew = () => {
 
                 <motion.div variants={fadeUp} className="flex flex-col sm:flex-row gap-4">
                   <a
-                    href="https://tradingsmart.ai"
+                    href="https://www.tradingsmart.ai/?ref=7crxluit"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-sky-500 text-black font-bold rounded-full hover:bg-sky-400 transition-all shadow-[0_0_20px_rgba(20,184,166,0.3)] hover:scale-105 active:scale-95 text-center font-syne"
