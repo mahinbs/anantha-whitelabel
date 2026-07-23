@@ -230,16 +230,30 @@ export function InfiniatePricingMatrix() {
               A freelance developer often charges{" "}
               <span className="text-white font-bold">₹40,000–₹1,50,000+</span> for a single algo — with no platform, no
               backtesting, and no ongoing support. Our Starter plan gets your strategy coded, tested, and live for{" "}
-              <span className="text-sky-400 font-bold">₹13,000 one-time</span>.
+              <span className="text-sky-400 font-bold">₹6,500 one-time</span>.
             </>
           ) : (
             <>
               A freelance developer often charges{" "}
               <span className="text-white font-bold">$500–$2,000+</span> for a single algo — with no platform, no
               backtesting, and no ongoing support. Our Starter plan gets your strategy coded, tested, and live for{" "}
-              <span className="text-sky-400 font-bold">$149 one-time</span>.
+              <span className="text-sky-400 font-bold">$79 one-time</span>.
             </>
           )}
+        </p>
+      </div>
+
+      <div className="mb-10 rounded-2xl bg-gradient-to-r from-amber-400/[0.08] via-sky-500/[0.06] to-transparent border border-amber-400/25 px-6 py-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+        <div className="shrink-0 flex items-center gap-3">
+          <span className="inline-flex items-center rounded-lg border border-dashed border-amber-400/60 bg-amber-400/10 px-3 py-1.5 font-ibm-mono text-sm font-bold tracking-widest text-amber-300">
+            TRADINGSMART
+          </span>
+          <span className="font-bebas text-2xl text-white leading-none">10% OFF</span>
+        </div>
+        <p className="text-zinc-300 text-sm font-light leading-relaxed">
+          Simulated your strategy on <span className="text-white font-semibold">TradingSmart</span> first?
+          Deploy it live with us for <span className="text-sky-400 font-semibold">$5–10 less</span> than TradingSmart
+          — and use code <span className="text-amber-300 font-semibold">TRADINGSMART</span> at checkout for an extra 10% off.
         </p>
       </div>
 
@@ -250,8 +264,8 @@ export function InfiniatePricingMatrix() {
         <PricingCard
           title="Starter"
           inr={inr}
-          integrationAmount={starter?.integrationFee ?? 149}
-          monthlyAmount={starter?.price ?? 49}
+          integrationAmount={starter?.integrationFee ?? 79}
+          monthlyAmount={starter?.price ?? 29}
           features={STARTER_FEATURES}
           cta={
             <Button
@@ -267,8 +281,8 @@ export function InfiniatePricingMatrix() {
         <PricingCard
           title="Growth"
           inr={inr}
-          integrationAmount={growth?.integrationFee ?? 299}
-          monthlyAmount={growth?.price ?? 99}
+          integrationAmount={growth?.integrationFee ?? 149}
+          monthlyAmount={growth?.price ?? 59}
           features={GROWTH_FEATURES}
           cta={
             <Button
@@ -284,8 +298,8 @@ export function InfiniatePricingMatrix() {
           title="Pro"
           popular
           inr={inr}
-          integrationAmount={pro?.integrationFee ?? 599}
-          monthlyAmount={pro?.price ?? 199}
+          integrationAmount={pro?.integrationFee ?? 299}
+          monthlyAmount={pro?.price ?? 99}
           features={PRO_FEATURES}
           cta={
             isProPaidStripe ? (

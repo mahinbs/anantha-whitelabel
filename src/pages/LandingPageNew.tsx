@@ -201,9 +201,9 @@ const LandingPageNew = () => {
 
     try {
       const planNames: Record<string, string> = {
-        starterPlan: "Starter Plan - $49/mo",
-        growthPlan: "Growth Plan - $79/mo",
-        professionalPlan: "Pro Plan - $129/mo",
+        starterPlan: "Starter Plan - $29/mo",
+        growthPlan: "Growth Plan - $59/mo",
+        professionalPlan: "Pro Plan - $99/mo",
         // custom: "Custom solutions available.",
       };
 
@@ -263,9 +263,9 @@ const LandingPageNew = () => {
     setIsInlineSubmitting(true);
     try {
       const planNames: Record<string, string> = {
-        starterPlan: "Starter Plan - $49/mo",
-        growthPlan: "Growth Plan - $79/mo",
-        professionalPlan: "Pro Plan - $129/mo",
+        starterPlan: "Starter Plan - $29/mo",
+        growthPlan: "Growth Plan - $59/mo",
+        professionalPlan: "Pro Plan - $99/mo",
       };
       const emailBody = `Name : ${data.name}\nEmail : ${data.email}\nPhone : ${data.phone}\nInterested Plan : ${planNames[data.plan] || data.plan}\nMessage : \n ${data.message || ""}`;
       const { affiliateId } = getSessionAffiliateAttribution();
@@ -980,6 +980,109 @@ const LandingPageNew = () => {
                 <p className="text-zinc-300 text-sm font-light leading-relaxed">"{t.quote}"</p>
               </motion.div>
             ))}
+          </div>
+        </div>
+      </motion.section>
+
+      {/* SIMULATION PARTNER — TRADINGSMART */}
+      <motion.section
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: true, margin: "-80px" }}
+        variants={staggerContainer}
+        id="simulation"
+        className="py-24 bg-black relative overflow-hidden"
+      >
+        <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-sky-500/30 to-transparent" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-sky-500/5 rounded-full blur-[160px] pointer-events-none" />
+        <div className="container mx-auto px-4 max-w-6xl relative z-10">
+          <div className="rounded-3xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl p-8 md:p-14 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-sky-500/5 blur-3xl -mr-20 -mt-20 pointer-events-none" />
+            <div className="flex flex-col lg:flex-row gap-12 items-center relative z-10">
+              {/* Left: copy */}
+              <div className="flex-1">
+                <motion.div
+                  variants={fadeUp}
+                  className="mb-6 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-sky-500/10 border border-sky-500/20 backdrop-blur-md"
+                >
+                  <div className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                  <span className="text-xs font-bold text-sky-400 tracking-wide uppercase">Partnered with TradingSmart</span>
+                </motion.div>
+                <motion.h2 variants={fadeUp} className={`${sectionTitle} text-left text-3xl md:text-5xl mb-6`}>
+                  Test your strategy in simulation before going live
+                </motion.h2>
+                <motion.p variants={fadeUp} className={`${bodyMuted} text-lg max-w-xl mb-8`}>
+                  Prove your edge risk-free on our partner{" "}
+                  <span className="text-white font-medium">TradingSmart</span>&apos;s simulation environment.
+                  Once the numbers hold up, come back and deploy it live with us — done-for-you, broker-ready,
+                  and priced <span className="text-sky-400 font-medium">$5–10 below TradingSmart</span>.
+                </motion.p>
+
+                <motion.ul variants={staggerContainer} className="space-y-4 mb-10 list-none">
+                  {[
+                    "Simulate first — validate entries, exits & drawdown before risking capital",
+                    "Deploy live with us for less than TradingSmart's algo pricing",
+                    "Use code TRADINGSMART for an extra 10% off your deployment",
+                  ].map((text, i) => (
+                    <motion.li key={i} variants={fadeUp} className="flex gap-4 items-start">
+                      <DiamondIcon />
+                      <span className="text-zinc-300 font-light leading-snug">{text}</span>
+                    </motion.li>
+                  ))}
+                </motion.ul>
+
+                <motion.div variants={fadeUp} className="flex flex-col sm:flex-row gap-4">
+                  <a
+                    href="https://tradingsmart.ai"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-sky-500 text-black font-bold rounded-full hover:bg-sky-400 transition-all shadow-[0_0_20px_rgba(20,184,166,0.3)] hover:scale-105 active:scale-95 text-center font-syne"
+                  >
+                    <FlaskConical className="w-5 h-5" />
+                    Test on TradingSmart
+                  </a>
+                  <a
+                    href="#pricing"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-transparent border border-sky-500/50 text-sky-400 font-bold rounded-full hover:bg-sky-500/10 transition-all hover:scale-105 active:scale-95 text-center font-syne"
+                  >
+                    <Rocket className="w-5 h-5" />
+                    Deploy live with us
+                  </a>
+                </motion.div>
+              </div>
+
+              {/* Right: flow card */}
+              <motion.div variants={fadeUp} className="w-full lg:w-[360px] shrink-0">
+                <div className="rounded-2xl border border-sky-500/20 bg-sky-500/[0.03] p-6 space-y-4">
+                  <div className="flex items-center gap-4 rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
+                    <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center shrink-0">
+                      <FlaskConical className="w-5 h-5 text-sky-400" />
+                    </div>
+                    <div>
+                      <p className="text-white font-bold text-sm">1. Simulate</p>
+                      <p className="text-zinc-500 text-xs">Test risk-free on TradingSmart</p>
+                    </div>
+                  </div>
+                  <div className="flex justify-center">
+                    <ChevronDown className="w-5 h-5 text-sky-500/60" />
+                  </div>
+                  <div className="flex items-center gap-4 rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
+                    <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center shrink-0">
+                      <Rocket className="w-5 h-5 text-sky-400" />
+                    </div>
+                    <div>
+                      <p className="text-white font-bold text-sm">2. Deploy live</p>
+                      <p className="text-zinc-500 text-xs">Go live with us for $5–10 less</p>
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-dashed border-amber-400/50 bg-amber-400/[0.06] p-4 text-center">
+                    <p className="text-[10px] uppercase tracking-widest text-amber-300/80 font-bold mb-1">Coupon</p>
+                    <p className="font-ibm-mono text-lg font-bold tracking-widest text-amber-300">TRADINGSMART</p>
+                    <p className="text-zinc-400 text-xs mt-1">10% off your deployment</p>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
           </div>
         </div>
       </motion.section>

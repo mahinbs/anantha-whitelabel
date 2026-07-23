@@ -27,8 +27,8 @@ export const PRICING_PLANS: PricingPlan[] = [
   {
     id: "starterPlan",
     name: "Starter",
-    integrationFee: 149,
-    price: 49,
+    integrationFee: 79,
+    price: 29,
     period: "month",
     description:
       "Full platform access with one custom algo strategy (edit access), backtesting, broker/OpenAlgo integration, and basic support.",
@@ -43,8 +43,8 @@ export const PRICING_PLANS: PricingPlan[] = [
   {
     id: "growthPlan",
     name: "Growth",
-    integrationFee: 299,
-    price: 99,
+    integrationFee: 149,
+    price: 59,
     period: "month",
     description:
       "Full platform access with up to three algo strategies, advanced backtesting & analytics, broker/OpenAlgo integration, and priority support.",
@@ -59,8 +59,8 @@ export const PRICING_PLANS: PricingPlan[] = [
   {
     id: "professionalPlan",
     name: "Pro",
-    integrationFee: 599,
-    price: 199,
+    integrationFee: 299,
+    price: 99,
     period: "month",
     description:
       "Full platform access with up to 10 custom algo strategies, advanced analytics & optimization, multi-broker integration, dedicated support, and fast execution setup.",
@@ -84,8 +84,8 @@ export const PRICING_PLANS_INR: PricingPlan[] = [
   {
     id: "starterPlan",
     name: "Starter",
-    integrationFee: 13000,
-    price: 1999,
+    integrationFee: 6500,
+    price: 999,
     period: "month",
     description:
       "Full platform access with one custom algo strategy (edit access), backtesting, broker/OpenAlgo integration, and basic support.",
@@ -100,8 +100,8 @@ export const PRICING_PLANS_INR: PricingPlan[] = [
   {
     id: "growthPlan",
     name: "Growth",
-    integrationFee: 29000,
-    price: 4999,
+    integrationFee: 14500,
+    price: 2499,
     period: "month",
     description:
       "Full platform access with up to three algo strategies, advanced backtesting & analytics, broker/OpenAlgo integration, and priority support.",
@@ -116,8 +116,8 @@ export const PRICING_PLANS_INR: PricingPlan[] = [
   {
     id: "professionalPlan",
     name: "Pro",
-    integrationFee: 75000,
-    price: 12999,
+    integrationFee: 37500,
+    price: 6499,
     period: "month",
     description:
       "Full platform access with up to 10 custom algo strategies, advanced analytics & optimization, multi-broker integration, dedicated support, and fast execution setup.",
